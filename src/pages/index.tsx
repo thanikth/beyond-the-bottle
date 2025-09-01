@@ -6,7 +6,7 @@ export default function Home() {
     <div style={{ textAlign: "center", marginTop: 100 }}>
       <h1>LINE Points System</h1>
       <Link href="/api/auth/login">
-        <button>Login with LINE</button>
+        <button type="button">Login with LINE</button>
       </Link>
     </div>
   );
