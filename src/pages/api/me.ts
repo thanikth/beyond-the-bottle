@@ -9,7 +9,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     const user = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string; displayName: string; pictureUrl: string; points: number };
-    res.json({ ...user, points: 100 }); // mock ให้มี 100 แต้ม
+    res.json({ ...user });
   } catch {
     res.status(401).json({ error: "Invalid token" });
   }

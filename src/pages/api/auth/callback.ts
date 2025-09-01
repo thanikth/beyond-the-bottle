@@ -2,7 +2,10 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getToken, getProfile } from "@/lib/lineAuth";
 import jwt from "jsonwebtoken";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
   const { code } = req.query;
 
   if (!code || typeof code !== "string") {
@@ -14,8 +17,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const profile = await getProfile(tokenData.access_token);
 
     // mock: เก็บเป็น cookie JWT
-    const jwtToken = jwt.sign(profile, process.env.JWT_SECRET!, { expiresIn: "1h" });
-    res.setHeader("Set-Cookie", `token=${jwtToken}; HttpOnly; Path=/; Max-Age=3600`);
+    const jwtToken = jwt.sign(profile, process.env.JWT_SECRET!, {
+      expiresIn: "1h",
+    });
+    res.setHeader(
+      "Set-Cookie",
+      `token=${jwtToken}; HttpOnly; Path=/; Max-Age=3600`
+    );
 
     res.redirect("/dashboard");
   } catch (err) {
