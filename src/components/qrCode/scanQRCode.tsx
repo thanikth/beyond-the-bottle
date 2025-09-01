@@ -17,10 +17,8 @@ export default function ScanQRCode() {
 
     let active = true;
 
-    codeReader.decodeFromVideoDevice(
-      undefined,
-      videoRef.current,
-      async (result, err) => {
+    codeReader
+      .decodeFromVideoDevice(undefined, videoRef.current, async (result, err) => {
         if (!active) return;
 
         if (result) {
@@ -37,26 +35,23 @@ export default function ScanQRCode() {
           } catch (e: any) {
             setError(e.message || 'API error');
           }
-
           active = false;
-          codeReader.stopContinuousDecode?.(); 
         }
 
         if (err && err.name !== 'NotFoundException') {
           console.error(err);
         }
-      }
-    ).catch(err => console.error('Camera error', err));
+      })
+      .catch((err) => console.error('Camera error', err));
 
     return () => {
       active = false;
-      codeReader.reset?.();
     };
   }, []);
 
   return (
     <div>
-      <h2>:: Info scan ::</h2>
+      <h2>Scan QR Code</h2>
       <video ref={videoRef} style={{ width: '100%' }} />
       {scannedUser && (
         <div>
