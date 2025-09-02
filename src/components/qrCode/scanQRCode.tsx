@@ -26,9 +26,9 @@ export default function ScanQRCode() {
 
         html5Qr = new Html5Qrcode(elementId);
 
-        // ไม่กำหนด qrbox => สแกนทั้งเฟรม
         const config = {
-          fps: 20, // เพิ่มเฟรมเรต ให้ตรวจจับถี่ขึ้น
+          fps: 15,
+          qrbox: Math.min(window.innerWidth, 360),
           aspectRatio: 1.333,
           disableFlip: false,
           experimentalFeatures: { useBarCodeDetectorIfSupported: true },
@@ -58,47 +58,77 @@ export default function ScanQRCode() {
         function onScanFailure(_errorMessage: any) {
           // per-frame decode error (ignore)
         }
+        const startWithExactEnvironment = async () => {
+          try {
+            await html5Qr?.start(
+              { facingMode: { exact: "environment" } } as any,
+              config,
+              onScanSuccess,
+              onScanFailure
+            );
+            return true;
+          } catch {
+            return false;
+          }
+        };
 
-        // พยายามใช้กล้องหลังเป็นค่าเริ่มต้น (cameraId ถ้ามี -> facingMode exact -> facingMode ideal)
-        const tryStart = async () => {
+        const startWithBackCameraId = async () => {
           try {
             const cams = await Html5Qrcode.getCameras();
-            const back = (cams || []).find((c) => /back|rear|environment/i.test(c.label));
+            const back = (cams || []).find((c) =>
+              /back|rear|environment/i.test(c.label)
+            );
             if (back?.id) {
-              await html5Qr?.start(back.id, config, onScanSuccess, onScanFailure);
+              await html5Qr?.start(
+                back.id,
+                config,
+                onScanSuccess,
+                onScanFailure
+              );
               return true;
             }
           } catch {
             // ignore
           }
-
-          try {
-            await html5Qr?.start({ facingMode: { exact: "environment" } } as any, config, onScanSuccess, onScanFailure);
-            return true;
-          } catch {
-            // ignore
-          }
-
-          try {
-            await html5Qr?.start({ facingMode: { ideal: "environment" } } as any, config, onScanSuccess, onScanFailure);
-            return true;
-          } catch {
-            // ignore
-          }
-
-          // fallback to any camera
-          try {
-            const cams = await Html5Qrcode.getCameras();
-            if (cams && cams[0]) {
-              await html5Qr?.start(cams[0].id, config, onScanSuccess, onScanFailure);
-              return true;
-            }
-          } catch {}
           return false;
         };
 
-        const started = await tryStart();
-        if (!started) throw new Error("Unable to start camera");
+        const startWithIdealEnvironment = async () => {
+          try {
+            await html5Qr?.start(
+              { facingMode: { ideal: "environment" } } as any,
+              config,
+              onScanSuccess,
+              onScanFailure
+            );
+            return true;
+          } catch {
+            return false;
+          }
+        };
+
+        let started = await startWithExactEnvironment();
+        if (!started) started = await startWithBackCameraId();
+        if (!started) started = await startWithIdealEnvironment();
+
+        if (!started) {
+          try {
+            const cams = await Html5Qrcode.getCameras();
+            if (cams && cams[0]) {
+              await html5Qr?.start(
+                cams[0].id,
+                config,
+                onScanSuccess,
+                onScanFailure
+              );
+              started = true;
+            }
+          } catch {}
+        }
+
+        if (!started) {
+          throw new Error("Unable to start any camera (rear preferred)");
+        }
       } catch (e) {
         console.error("html5-qrcode init error", e);
         setError("Camera error");
@@ -110,7 +140,9 @@ export default function ScanQRCode() {
       if (html5Qr) {
         html5Qr
           .stop()
-          .catch(() => {})
+          .catch(() => {
+            /* ignore */
+          })
           .finally(() => {
             try {
               html5Qr?.clear();
@@ -137,8 +169,9 @@ export default function ScanQRCode() {
       )}
       {error && <p style={{ color: "red" }}>{error}</p>}
       <h2>Scan QR Code</h2>
-      <video ref={videoRef} style={{ width: "100%" }} />
-      
+      {testTextScan === "" && (
+        <video ref={videoRef} style={{ width: "50%" }} />
+      )}
     </div>
   );
 }
