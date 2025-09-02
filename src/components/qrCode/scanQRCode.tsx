@@ -1,5 +1,3 @@
-// ...existing code...
-"use client";
 import { useEffect, useRef, useState } from "react";
 import { BrowserQRCodeReader } from "@zxing/browser";
 // import { fetchUserByUserId } from "@/pages/api/users/getUser"; // removed - use fetch to /api instead
