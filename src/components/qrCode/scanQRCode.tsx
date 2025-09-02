@@ -57,19 +57,19 @@ export default function ScanQRCode() {
 
   return (
     <div>
-      <h2>Scan QR Code</h2>
-      <video ref={videoRef} style={{ width: "100%" }} />
+      <div>testTextScan: {testTextScan}</div>
       {scannedUser && (
         <>
           <div>
             <p>User ID: {scannedUser.userId}</p>
             <p>Points: {scannedUser.points}</p>
           </div>
-
-          <div>testTextScan: {testTextScan}</div>
         </>
       )}
       {error && <p style={{ color: "red" }}>{error}</p>}
+      <h2>Scan QR Code</h2>
+      <video ref={videoRef} style={{ width: "100%" }} />
+      
     </div>
   );
 }
