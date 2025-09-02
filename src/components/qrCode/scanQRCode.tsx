@@ -10,17 +10,30 @@ export default function ScanQRCode() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const codeReaderRef = useRef<BrowserQRCodeReader | null>(null);
 
+  // ...existing code...
   useEffect(() => {
     const codeReader = new BrowserQRCodeReader();
     codeReaderRef.current = codeReader;
 
     if (!videoRef.current) return;
 
+    // ช่วยให้วิดีโอเล่น inline บนมือถือและตั้งค่า autoplay/muted
+    videoRef.current.playsInline = true;
+    videoRef.current.autoplay = true;
+    videoRef.current.muted = true;
+
     let active = true;
 
+    // ใช้ decodeFromConstraints เพื่อบังคับกล้องหลังและความละเอียดที่เหมาะสม
     codeReader
-      .decodeFromVideoDevice(
-        undefined,
+      .decodeFromConstraints(
+        {
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        },
         videoRef.current,
         async (result, err) => {
           if (!active) return;
@@ -52,8 +65,30 @@ export default function ScanQRCode() {
 
     return () => {
       active = false;
+
+      // หยุดการ decode ถ้ามีเมธอดนั้น (บางเวอร์ชันของไลบรารีอาจมี)
+      try {
+        (codeReaderRef.current as any)?.stopContinuousDecode?.();
+        // ถ้ามี reset ให้เรียกผ่าน any เพื่อหลีกเลี่ยงข้อผิดพลาดของ TS
+        (codeReaderRef.current as any)?.reset?.();
+      } catch (e) {
+        // ignore
+      }
+
+      // หยุด media tracks ของ video เพื่อปลดกล้อง
+      try {
+        const videoEl = videoRef.current;
+        if (videoEl && videoEl.srcObject) {
+          const stream = videoEl.srcObject as MediaStream;
+          stream.getTracks().forEach((track) => track.stop());
+          videoEl.srcObject = null;
+        }
+      } catch (e) {
+        // ignore
+      }
     };
   }, []);
+//
 
   return (
     <div>
