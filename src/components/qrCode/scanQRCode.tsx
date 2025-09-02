@@ -22,61 +22,20 @@ export default function ScanQRCode() {
         if (!document.getElementById(elementId)) {
           const container = document.createElement("div");
           container.id = elementId;
-          // วางไว้ข้างๆ video element (หรือแทน video)
           videoRef.current?.parentElement?.appendChild(container);
-        }
-
-        // พยายามดึงรายชื่อกล้องก่อน ถ้ามี ให้เลือกกล้องที่มี label เป็น back/rear/environment
-        let cameraId: string | undefined;
-        try {
-          const cameras = await Html5Qrcode.getCameras();
-          const backCamera = (cameras || []).find((c) =>
-            /back|rear|environment/i.test(c.label)
-          );
-          cameraId = backCamera ? backCamera.id : cameras?.[0]?.id;
-        } catch (e) {
-          // ถ้าไม่ได้รับรายชื่อกล้อง (บางเบราว์เซอร์/permission) ให้ fallback ไปที่ facingMode constraints
-          cameraId = undefined;
         }
 
         html5Qr = new Html5Qrcode(elementId);
 
         const config = {
           fps: 15,
-          // ให้ qrbox ใหญ่ขึ้นบนมือถือ -> ช่วยให้สแกนติดง่ายขึ้น
           qrbox: Math.min(window.innerWidth, 360),
           aspectRatio: 1.333,
           disableFlip: false,
           experimentalFeatures: { useBarCodeDetectorIfSupported: true },
         };
 
-        // หากมี cameraId ใช้ตรง ๆ, ถ้าไม่ ให้พยายามใช้ facingMode เป็น environment (rear)
-        // พยายาม exact ก่อน ถ้าไม่สำเร็จจะ fallback ไป ideal
-        const startWithConstraints = async () => {
-          try {
-            await html5Qr?.start(
-              { facingMode: { exact: "environment" } } as any,
-              config,
-              onScanSuccess,
-              onScanFailure
-            );
-            return true;
-          } catch {
-            try {
-              await html5Qr?.start(
-                { facingMode: { ideal: "environment" } } as any,
-                config,
-                onScanSuccess,
-                onScanFailure
-              );
-              return true;
-            } catch {
-              return false;
-            }
-          }
-        };
-
-        // success / failure handlers
+        // handlers
         async function onScanSuccess(decodedText: string) {
           if (!active) return;
           setTestTextScan(decodedText);
@@ -98,27 +57,72 @@ export default function ScanQRCode() {
           } catch {}
         }
 
-        function onScanFailure(errorMessage: any) {
-          // per-frame decode error (ไม่ต้องแสดงทั้งหมด)
-          // console.debug("scan error", errorMessage);
+        function onScanFailure(_errorMessage: any) {
+          // per-frame decode error (ignore)
         }
 
-        // เริ่มสแกน: ถ้ามี cameraId ใช้ก่อน ถ้าเริ่มไม่ได้ ให้ลองใช้ facingMode constraints
-        let started = false;
-        if (cameraId) {
+        // พยายามเริ่มด้วยลำดับที่ให้กล้องหลังเป็นค่าเริ่มต้น
+        const startWithExactEnvironment = async () => {
           try {
-            await html5Qr.start(cameraId, config, onScanSuccess, onScanFailure);
-            started = true;
-          } catch (e) {
-            // ถ้าเริ่มด้วย cameraId ไม่ได้ ให้ลองใช้ constraints
-            started = await startWithConstraints();
+            await html5Qr?.start(
+              { facingMode: { exact: "environment" } } as any,
+              config,
+              onScanSuccess,
+              onScanFailure
+            );
+            return true;
+          } catch {
+            return false;
           }
-        } else {
-          started = await startWithConstraints();
+        };
+
+        const startWithBackCameraId = async () => {
+          try {
+            const cams = await Html5Qrcode.getCameras();
+            const back = (cams || []).find((c) => /back|rear|environment/i.test(c.label));
+            if (back?.id) {
+              await html5Qr?.start(back.id, config, onScanSuccess, onScanFailure);
+              return true;
+            }
+          } catch {
+            // ignore
+          }
+          return false;
+        };
+
+        const startWithIdealEnvironment = async () => {
+          try {
+            await html5Qr?.start(
+              { facingMode: { ideal: "environment" } } as any,
+              config,
+              onScanSuccess,
+              onScanFailure
+            );
+            return true;
+          } catch {
+            return false;
+          }
+        };
+
+        // ลองลำดับ: exact -> cameraId (จาก getCameras) -> ideal -> fallback any camera
+        let started = await startWithExactEnvironment();
+        if (!started) started = await startWithBackCameraId();
+        if (!started) started = await startWithIdealEnvironment();
+
+        if (!started) {
+          try {
+            const cams = await Html5Qrcode.getCameras();
+            if (cams && cams[0]) {
+              await html5Qr?.start(cams[0].id, config, onScanSuccess, onScanFailure);
+              started = true;
+            }
+          } catch {
+            // ignore
+          }
         }
 
         if (!started) {
-          throw new Error("Unable to start camera with rear-facing preference");
+          throw new Error("Unable to start any camera (rear preferred)");
         }
       } catch (e) {
         console.error("html5-qrcode init error", e);
@@ -140,7 +144,6 @@ export default function ScanQRCode() {
             } catch {}
           });
       }
-      // ถ้าเราเพิ่ม container ด้วยโค้ดข้างต้น อาจลบออกได้ตามต้องการ
       try {
         const el = document.getElementById(elementId);
         if (el && el.parentElement) el.parentElement.removeChild(el);
