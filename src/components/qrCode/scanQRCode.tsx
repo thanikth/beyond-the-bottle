@@ -11,7 +11,6 @@ export default function ScanQRCode() {
   const codeReaderRef = useRef<BrowserQRCodeReader | null>(null);
 
   // ...existing code...
-  // ...existing code...
   useEffect(() => {
     const codeReader = new BrowserQRCodeReader();
     codeReaderRef.current = codeReader;
@@ -25,124 +24,56 @@ export default function ScanQRCode() {
 
     let active = true;
 
-    const constraints: MediaStreamConstraints = {
-      video: {
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        frameRate: { ideal: 30 },
-      },
-    };
-
-    // พยายามเปิด torch / ตั้ง focus ถ้าอุปกรณ์รองรับ
-    const tryEnhanceCamera = (stream: MediaStream | null) => {
-      try {
-        if (!stream) return;
-        const track = stream.getVideoTracks()[0];
-        if (!track) return;
-
-        // ลองเปิด torch ถ้ารองรับ (secure context + rear camera)
-        const capabilities = (track.getCapabilities && track.getCapabilities()) || {};
-        const supportsTorch = (capabilities as any).torch;
-        if (supportsTorch) {
-          try {
-            // ระวัง: บางเครื่องต้องอนุญาตเฉพาะเมื่อ user interaction เกิดขึ้น
-            track.applyConstraints({ advanced: [{ torch: true }] } as any);
-          } catch {
-            // ignore
-          }
-        }
-
-        // ลองตั้ง focus mode ผ่าน applyConstraints ถ้ามี
-        const focusSupport = (capabilities as any).focusMode;
-        if (focusSupport && Array.isArray((capabilities as any).focusMode)) {
-          try {
-            track.applyConstraints({ advanced: [{ focusMode: "continuous" }] } as any);
-          } catch {
-            // ignore
-          }
-        }
-
-        // พยายามใช้ ImageCapture เพื่อปรับ focus/zoom ถ้าเบราว์เซอร์รองรับ
-        try {
-          const ImageCapture = (window as any).ImageCapture;
-          if (ImageCapture) {
-            const imgCap = new ImageCapture(track);
-            imgCap.getPhotoCapabilities?.().then((caps: any) => {
-              // ถ้ารองรับ focusMode -> set to continuous หรือ single-shot (best-effort)
-              if (caps.focusMode && caps.focusMode.includes("continuous")) {
-                try {
-                  track.applyConstraints?.({ advanced: [{ focusMode: "continuous" }] } as any);
-                } catch {}
-              }
-              // ถ้ารองรับ torch ผ่าน photo capabilities ให้เปิด (บางอุปกรณ์)
-              if (caps.torch) {
-                try {
-                  track.applyConstraints?.({ advanced: [{ torch: true }] } as any);
-                } catch {}
-              }
-            }).catch(() => {});
-          }
-        } catch {
-          // ignore
-        }
-      } catch {
-        // ignore any failures
-      }
-    };
-
-    // เรียก decode - ไลบรารีจะให้ video.srcObject
+    // ใช้ decodeFromConstraints เพื่อบังคับกล้องหลังและความละเอียดที่เหมาะสม
     codeReader
-      .decodeFromConstraints(constraints, videoRef.current, async (result, err) => {
-        if (!active) return;
+      .decodeFromConstraints(
+        {
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        },
+        videoRef.current,
+        async (result, err) => {
+          if (!active) return;
 
-        if (result) {
-          const userId = result.getText();
-          console.log("Scanned userId:", userId);
-          setTestTextScan(userId);
+          if (result) {
+            const userId = result.getText();
+            console.log("Scanned userId:", userId);
+            setTestTextScan(userId);
 
-          try {
-            const userData = await fetchUserByUserId(userId);
-            if (!userData || !userData.exists) {
-              setError("User not found");
-              return;
+            try {
+              const userData = await fetchUserByUserId(userId);
+              if (!userData || !userData.exists) {
+                setError("User not found");
+                return;
+              }
+              setScannedUser(userData.user);
+            } catch (e: any) {
+              setError(e.message || "API error");
             }
-            setScannedUser(userData.user);
-          } catch (e: any) {
-            setError(e.message || "API error");
+            active = false;
           }
-          active = false;
-        }
 
-        if (err && err.name !== "NotFoundException") {
-          console.error(err);
+          if (err && err.name !== "NotFoundException") {
+            console.error(err);
+          }
         }
-      })
-      .catch((err) => {
-        console.error("Camera error", err);
-      });
-
-    // หลังจากสตรีมถูกผูกกับ video แล้ว ให้ลองปรับ torch/focus (best-effort)
-    const enhanceTimeout = setTimeout(() => {
-      try {
-        const stream = videoRef.current?.srcObject as MediaStream | null;
-        tryEnhanceCamera(stream);
-      } catch {
-        // ignore
-      }
-    }, 500); // รอให้ library ผูก stream เสร็จก่อน
+      )
+      .catch((err) => console.error("Camera error", err));
 
     return () => {
       active = false;
-      clearTimeout(enhanceTimeout);
 
       // หยุดการ decode ถ้ามีเมธอดนั้น (บางเวอร์ชันของไลบรารีอาจมี)
       try {
         (codeReaderRef.current as any)?.stopContinuousDecode?.();
+        // ถ้ามี reset ให้เรียกผ่าน any เพื่อหลีกเลี่ยงข้อผิดพลาดของ TS
+        (codeReaderRef.current as any)?.reset?.();
       } catch (e) {
         // ignore
       }
-      // ไม่เรียก reset ที่อาจไม่มีในบางเวอร์ชัน
 
       // หยุด media tracks ของ video เพื่อปลดกล้อง
       try {
@@ -155,10 +86,9 @@ export default function ScanQRCode() {
       } catch (e) {
         // ignore
       }
-
-      codeReaderRef.current = null;
     };
   }, []);
+//
 
   return (
     <div>
