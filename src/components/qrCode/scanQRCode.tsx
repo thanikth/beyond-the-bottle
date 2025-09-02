@@ -18,7 +18,6 @@ export default function ScanQRCode() {
 
     (async () => {
       try {
-        // สร้าง container ถ้ายังไม่มี
         if (!document.getElementById(elementId)) {
           const container = document.createElement("div");
           container.id = elementId;
@@ -27,15 +26,14 @@ export default function ScanQRCode() {
 
         html5Qr = new Html5Qrcode(elementId);
 
+        // ไม่กำหนด qrbox => สแกนทั้งเฟรม
         const config = {
-          fps: 15,
-          qrbox: Math.min(window.innerWidth, 360),
+          fps: 20, // เพิ่มเฟรมเรต ให้ตรวจจับถี่ขึ้น
           aspectRatio: 1.333,
           disableFlip: false,
           experimentalFeatures: { useBarCodeDetectorIfSupported: true },
         };
 
-        // handlers
         async function onScanSuccess(decodedText: string) {
           if (!active) return;
           setTestTextScan(decodedText);
@@ -61,22 +59,8 @@ export default function ScanQRCode() {
           // per-frame decode error (ignore)
         }
 
-        // พยายามเริ่มด้วยลำดับที่ให้กล้องหลังเป็นค่าเริ่มต้น
-        const startWithExactEnvironment = async () => {
-          try {
-            await html5Qr?.start(
-              { facingMode: { exact: "environment" } } as any,
-              config,
-              onScanSuccess,
-              onScanFailure
-            );
-            return true;
-          } catch {
-            return false;
-          }
-        };
-
-        const startWithBackCameraId = async () => {
+        // พยายามใช้กล้องหลังเป็นค่าเริ่มต้น (cameraId ถ้ามี -> facingMode exact -> facingMode ideal)
+        const tryStart = async () => {
           try {
             const cams = await Html5Qrcode.getCameras();
             const back = (cams || []).find((c) => /back|rear|environment/i.test(c.label));
@@ -87,43 +71,34 @@ export default function ScanQRCode() {
           } catch {
             // ignore
           }
-          return false;
-        };
 
-        const startWithIdealEnvironment = async () => {
           try {
-            await html5Qr?.start(
-              { facingMode: { ideal: "environment" } } as any,
-              config,
-              onScanSuccess,
-              onScanFailure
-            );
+            await html5Qr?.start({ facingMode: { exact: "environment" } } as any, config, onScanSuccess, onScanFailure);
             return true;
           } catch {
-            return false;
+            // ignore
           }
-        };
 
-        // ลองลำดับ: exact -> cameraId (จาก getCameras) -> ideal -> fallback any camera
-        let started = await startWithExactEnvironment();
-        if (!started) started = await startWithBackCameraId();
-        if (!started) started = await startWithIdealEnvironment();
+          try {
+            await html5Qr?.start({ facingMode: { ideal: "environment" } } as any, config, onScanSuccess, onScanFailure);
+            return true;
+          } catch {
+            // ignore
+          }
 
-        if (!started) {
+          // fallback to any camera
           try {
             const cams = await Html5Qrcode.getCameras();
             if (cams && cams[0]) {
               await html5Qr?.start(cams[0].id, config, onScanSuccess, onScanFailure);
-              started = true;
+              return true;
             }
-          } catch {
-            // ignore
-          }
-        }
+          } catch {}
+          return false;
+        };
 
-        if (!started) {
-          throw new Error("Unable to start any camera (rear preferred)");
-        }
+        const started = await tryStart();
+        if (!started) throw new Error("Unable to start camera");
       } catch (e) {
         console.error("html5-qrcode init error", e);
         setError("Camera error");
@@ -135,9 +110,7 @@ export default function ScanQRCode() {
       if (html5Qr) {
         html5Qr
           .stop()
-          .catch(() => {
-            /* ignore */
-          })
+          .catch(() => {})
           .finally(() => {
             try {
               html5Qr?.clear();
