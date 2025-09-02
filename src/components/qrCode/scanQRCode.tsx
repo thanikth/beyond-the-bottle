@@ -26,51 +26,100 @@ export default function ScanQRCode() {
           videoRef.current?.parentElement?.appendChild(container);
         }
 
-        const cameras = await Html5Qrcode.getCameras();
-        const backCamera = (cameras || []).find((c) =>
-          /back|rear|environment/i.test(c.label)
-        );
-        const cameraId = backCamera ? backCamera.id : cameras?.[0]?.id;
+        // พยายามดึงรายชื่อกล้องก่อน ถ้ามี ให้เลือกกล้องที่มี label เป็น back/rear/environment
+        let cameraId: string | undefined;
+        try {
+          const cameras = await Html5Qrcode.getCameras();
+          const backCamera = (cameras || []).find((c) =>
+            /back|rear|environment/i.test(c.label)
+          );
+          cameraId = backCamera ? backCamera.id : cameras?.[0]?.id;
+        } catch (e) {
+          // ถ้าไม่ได้รับรายชื่อกล้อง (บางเบราว์เซอร์/permission) ให้ fallback ไปที่ facingMode constraints
+          cameraId = undefined;
+        }
 
         html5Qr = new Html5Qrcode(elementId);
 
         const config = {
           fps: 15,
-          qrbox: 300, // ขนาดกล่องสแกน — ปรับให้ใหญ่เพื่อให้ง่ายขึ้น
+          // ให้ qrbox ใหญ่ขึ้นบนมือถือ -> ช่วยให้สแกนติดง่ายขึ้น
+          qrbox: Math.min(window.innerWidth, 360),
           aspectRatio: 1.333,
           disableFlip: false,
           experimentalFeatures: { useBarCodeDetectorIfSupported: true },
         };
 
-        await html5Qr.start(
-          cameraId ?? { facingMode: { ideal: "environment" } } as any,
-          config,
-          async (decodedText) => {
-            if (!active) return;
-            setTestTextScan(decodedText);
-
+        // หากมี cameraId ใช้ตรง ๆ, ถ้าไม่ ให้พยายามใช้ facingMode เป็น environment (rear)
+        // พยายาม exact ก่อน ถ้าไม่สำเร็จจะ fallback ไป ideal
+        const startWithConstraints = async () => {
+          try {
+            await html5Qr?.start(
+              { facingMode: { exact: "environment" } } as any,
+              config,
+              onScanSuccess,
+              onScanFailure
+            );
+            return true;
+          } catch {
             try {
-              const userData = await fetchUserByUserId(decodedText);
-              if (!userData || !userData.exists) {
-                setError("User not found");
-                return;
-              }
-              setScannedUser(userData.user);
-            } catch (e: any) {
-              setError(e?.message || "API error");
+              await html5Qr?.start(
+                { facingMode: { ideal: "environment" } } as any,
+                config,
+                onScanSuccess,
+                onScanFailure
+              );
+              return true;
+            } catch {
+              return false;
             }
-
-            active = false;
-            // หยุดหลังสแกนเสร็จ (ถ้าต้องการ)
-            try {
-              await html5Qr?.stop();
-            } catch {}
-          },
-          (errorMessage) => {
-            // per-frame decode error (ไม่ต้องแสดงทั้งหมด)
-            // console.debug("scan error", errorMessage);
           }
-        );
+        };
+
+        // success / failure handlers
+        async function onScanSuccess(decodedText: string) {
+          if (!active) return;
+          setTestTextScan(decodedText);
+
+          try {
+            const userData = await fetchUserByUserId(decodedText);
+            if (!userData || !userData.exists) {
+              setError("User not found");
+              return;
+            }
+            setScannedUser(userData.user);
+          } catch (e: any) {
+            setError(e?.message || "API error");
+          }
+
+          active = false;
+          try {
+            await html5Qr?.stop();
+          } catch {}
+        }
+
+        function onScanFailure(errorMessage: any) {
+          // per-frame decode error (ไม่ต้องแสดงทั้งหมด)
+          // console.debug("scan error", errorMessage);
+        }
+
+        // เริ่มสแกน: ถ้ามี cameraId ใช้ก่อน ถ้าเริ่มไม่ได้ ให้ลองใช้ facingMode constraints
+        let started = false;
+        if (cameraId) {
+          try {
+            await html5Qr.start(cameraId, config, onScanSuccess, onScanFailure);
+            started = true;
+          } catch (e) {
+            // ถ้าเริ่มด้วย cameraId ไม่ได้ ให้ลองใช้ constraints
+            started = await startWithConstraints();
+          }
+        } else {
+          started = await startWithConstraints();
+        }
+
+        if (!started) {
+          throw new Error("Unable to start camera with rear-facing preference");
+        }
       } catch (e) {
         console.error("html5-qrcode init error", e);
         setError("Camera error");
