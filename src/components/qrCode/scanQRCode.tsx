@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BrowserQRCodeReader } from "@zxing/browser";
 import { fetchUserByUserId } from "@/pages/api/users/getUser";
+import { Html5Qrcode } from "html5-qrcode";
 
 export default function ScanQRCode() {
   const [scannedUser, setScannedUser] = useState<any | null>(null);
@@ -10,85 +11,93 @@ export default function ScanQRCode() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const codeReaderRef = useRef<BrowserQRCodeReader | null>(null);
 
-  // ...existing code...
   useEffect(() => {
-    const codeReader = new BrowserQRCodeReader();
-    codeReaderRef.current = codeReader;
-
-    if (!videoRef.current) return;
-
-    // ช่วยให้วิดีโอเล่น inline บนมือถือและตั้งค่า autoplay/muted
-    videoRef.current.playsInline = true;
-    videoRef.current.autoplay = true;
-    videoRef.current.muted = true;
-
+    const elementId = "html5qr-reader";
+    let html5Qr: Html5Qrcode | null = null;
     let active = true;
 
-    // ใช้ decodeFromConstraints เพื่อบังคับกล้องหลังและความละเอียดที่เหมาะสม
-    codeReader
-      .decodeFromConstraints(
-        {
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-        },
-        videoRef.current,
-        async (result, err) => {
-          if (!active) return;
+    (async () => {
+      try {
+        // สร้าง container ถ้ายังไม่มี
+        if (!document.getElementById(elementId)) {
+          const container = document.createElement("div");
+          container.id = elementId;
+          // วางไว้ข้างๆ video element (หรือแทน video)
+          videoRef.current?.parentElement?.appendChild(container);
+        }
 
-          if (result) {
-            const userId = result.getText();
-            console.log("Scanned userId:", userId);
-            setTestTextScan(userId);
+        const cameras = await Html5Qrcode.getCameras();
+        const backCamera = (cameras || []).find((c) =>
+          /back|rear|environment/i.test(c.label)
+        );
+        const cameraId = backCamera ? backCamera.id : cameras?.[0]?.id;
+
+        html5Qr = new Html5Qrcode(elementId);
+
+        const config = {
+          fps: 15,
+          qrbox: 300, // ขนาดกล่องสแกน — ปรับให้ใหญ่เพื่อให้ง่ายขึ้น
+          aspectRatio: 1.333,
+          disableFlip: false,
+          experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        };
+
+        await html5Qr.start(
+          cameraId ?? { facingMode: { ideal: "environment" } } as any,
+          config,
+          async (decodedText) => {
+            if (!active) return;
+            setTestTextScan(decodedText);
 
             try {
-              const userData = await fetchUserByUserId(userId);
+              const userData = await fetchUserByUserId(decodedText);
               if (!userData || !userData.exists) {
                 setError("User not found");
                 return;
               }
               setScannedUser(userData.user);
             } catch (e: any) {
-              setError(e.message || "API error");
+              setError(e?.message || "API error");
             }
-            active = false;
-          }
 
-          if (err && err.name !== "NotFoundException") {
-            console.error(err);
+            active = false;
+            // หยุดหลังสแกนเสร็จ (ถ้าต้องการ)
+            try {
+              await html5Qr?.stop();
+            } catch {}
+          },
+          (errorMessage) => {
+            // per-frame decode error (ไม่ต้องแสดงทั้งหมด)
+            // console.debug("scan error", errorMessage);
           }
-        }
-      )
-      .catch((err) => console.error("Camera error", err));
+        );
+      } catch (e) {
+        console.error("html5-qrcode init error", e);
+        setError("Camera error");
+      }
+    })();
 
     return () => {
       active = false;
-
-      // หยุดการ decode ถ้ามีเมธอดนั้น (บางเวอร์ชันของไลบรารีอาจมี)
-      try {
-        (codeReaderRef.current as any)?.stopContinuousDecode?.();
-        // ถ้ามี reset ให้เรียกผ่าน any เพื่อหลีกเลี่ยงข้อผิดพลาดของ TS
-        (codeReaderRef.current as any)?.reset?.();
-      } catch (e) {
-        // ignore
+      if (html5Qr) {
+        html5Qr
+          .stop()
+          .catch(() => {
+            /* ignore */
+          })
+          .finally(() => {
+            try {
+              html5Qr?.clear();
+            } catch {}
+          });
       }
-
-      // หยุด media tracks ของ video เพื่อปลดกล้อง
+      // ถ้าเราเพิ่ม container ด้วยโค้ดข้างต้น อาจลบออกได้ตามต้องการ
       try {
-        const videoEl = videoRef.current;
-        if (videoEl && videoEl.srcObject) {
-          const stream = videoEl.srcObject as MediaStream;
-          stream.getTracks().forEach((track) => track.stop());
-          videoEl.srcObject = null;
-        }
-      } catch (e) {
-        // ignore
-      }
+        const el = document.getElementById(elementId);
+        if (el && el.parentElement) el.parentElement.removeChild(el);
+      } catch {}
     };
   }, []);
-//
 
   return (
     <div>
