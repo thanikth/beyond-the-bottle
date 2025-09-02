@@ -17,11 +17,16 @@ export default function ScanQRCode() {
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | undefined>(undefined);
+  const [torchAvailable, setTorchAvailable] = useState<boolean>(false);
+  const [torchOn, setTorchOn] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const codeReaderRef = useRef<BrowserQRCodeReader | null>(null);
   const lastScannedRef = useRef<string | null>(null);
   const lastScanTimeRef = useRef<number>(0);
+  const isRunningRef = useRef<boolean>(false);
 
   const stopScanner = (reader: BrowserQRCodeReader | null, videoEl: HTMLVideoElement | null) => {
     if (reader) {
@@ -39,6 +44,7 @@ export default function ScanQRCode() {
           r.stop();
         }
       } catch {}
+      codeReaderRef.current = null;
     }
 
     if (videoEl) {
@@ -54,6 +60,7 @@ export default function ScanQRCode() {
         } catch {}
       }
     }
+    isRunningRef.current = false;
   };
 
   const pickBackCameraDeviceId = async (): Promise<string | undefined> => {
@@ -61,8 +68,8 @@ export default function ScanQRCode() {
       if (!navigator?.mediaDevices?.enumerateDevices) return undefined;
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoInputs = devices.filter((d) => d.kind === "videoinput");
-      if (videoInputs.length === 0) return undefined;
-      // try to pick a back camera by label (if labels available)
+      setCameraDevices(videoInputs);
+      // prefer device that looks like back/rear/environment
       const back = videoInputs.find((d) => /back|rear|environment|camera 1|camera 0/i.test(d.label || ""));
       return back?.deviceId || videoInputs[0]?.deviceId;
     } catch (err) {
@@ -71,8 +78,47 @@ export default function ScanQRCode() {
     }
   };
 
-  // prompt permission immediately (attempt). many mobile browsers still require a user gesture,
-  // but we try and then auto-start scanning if allowed.
+  const detectTorchSupport = async (videoEl: HTMLVideoElement | null) => {
+    setTorchAvailable(false);
+    if (!videoEl) return;
+    const stream = videoEl.srcObject as MediaStream | null;
+    if (!stream) return;
+    const track = stream.getVideoTracks()[0];
+    if (!track?.getCapabilities) return;
+    try {
+      const caps = track.getCapabilities() as any;
+      if (caps && caps.torch) {
+        setTorchAvailable(true);
+      } else {
+        setTorchAvailable(false);
+      }
+    } catch {
+      setTorchAvailable(false);
+    }
+  };
+
+  const setTorch = async (on: boolean) => {
+    const videoEl = videoRef.current;
+    const stream = videoEl?.srcObject as MediaStream | null;
+    if (!stream) return;
+    const track = stream.getVideoTracks()[0];
+    if (!track || !(track as any).applyConstraints) return;
+    try {
+      await (track as any).applyConstraints({ advanced: [{ torch: !!on }] });
+      setTorchOn(on);
+    } catch (e) {
+      console.warn("torch applyConstraints failed", e);
+      setTorchAvailable(false);
+      setTorchOn(false);
+    }
+  };
+
+  useEffect(() => {
+    // keep isRunningRef in sync with state for callbacks
+    isRunningRef.current = isRunning;
+  }, [isRunning]);
+
+  // initial permission probe + populate device list
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -81,7 +127,6 @@ export default function ScanQRCode() {
         return;
       }
       try {
-        // request a short stream to trigger permission prompt and to get device labels
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: false,
@@ -94,17 +139,14 @@ export default function ScanQRCode() {
         });
         if (mounted) {
           setPermissionGranted(true);
-          // try to auto-start scanner after permission granted
-          try {
-            await startScanner();
-          } catch (e) {
-            // startScanner will manage its own errors
-          }
+          // populate cameras
+          const deviceId = await pickBackCameraDeviceId();
+          setSelectedDeviceId(deviceId);
+          // do not auto-start on all devices; leave to explicit user action, but you can auto-start if desired
         }
       } catch (err: any) {
         if (mounted) {
           setPermissionGranted(false);
-          // don't spam error if user simply hasn't granted permission yet
           setError(String(err?.message || err));
         }
       }
@@ -116,7 +158,7 @@ export default function ScanQRCode() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startScanner = async () => {
+  const startScanner = async (deviceId?: string) => {
     setError(null);
     setScannedUser(null);
     setTestTextScan("");
@@ -134,26 +176,31 @@ export default function ScanQRCode() {
       return;
     }
 
-    // create reader and keep reference
+    // stop any existing scanner first
+    stopScanner(codeReaderRef.current, videoEl);
+
     const codeReader = new BrowserQRCodeReader();
     codeReaderRef.current = codeReader;
+    isRunningRef.current = true;
+    setIsRunning(true);
 
     try {
-      // pick back camera deviceId if available; decodeFromVideoDevice expects deviceId string or undefined
-      const deviceId = await pickBackCameraDeviceId();
-      setIsRunning(true);
+      // choose device; prefer provided deviceId (user selected) else pickBackCameraDeviceId
+      const deviceToUse = deviceId ?? (selectedDeviceId ?? (await pickBackCameraDeviceId()));
+      setSelectedDeviceId(deviceToUse);
 
+      // start decodeFromVideoDevice with constraints aiming for phone-to-phone scanning
       await codeReader.decodeFromVideoDevice(
-        deviceId ?? undefined,
+        deviceToUse ?? undefined,
         videoEl,
         async (result, err) => {
-          if (!isRunning) return;
+          if (!isRunningRef.current) return;
 
           if (result) {
             const text = result.getText?.() ?? "";
             const now = Date.now();
-            // debounce repeated reads: only accept if different or after 1500ms
-            if (text && (text !== lastScannedRef.current || now - lastScanTimeRef.current > 1500)) {
+            // debounce repeated reads: accept if new or after 1200ms
+            if (text && (text !== lastScannedRef.current || now - lastScanTimeRef.current > 1200)) {
               lastScannedRef.current = text;
               lastScanTimeRef.current = now;
               setTestTextScan(text);
@@ -168,31 +215,53 @@ export default function ScanQRCode() {
               } catch (e: any) {
                 setError(e?.message || "API error");
               }
-              // DO NOT stop the scanner automatically — keep scanning phone screen continuously
-              // if you want to stop after first detection, call stopScanner(...) here.
+              // keep scanning continuously for phone-to-phone scenarios
             }
           }
 
-          // log non-critical errors (NotFoundException is normal while scanning)
+          // log non-critical errors (NotFoundException is expected while scanning)
           if (err && (err as any).name !== "NotFoundException") {
             console.error("ZXing error:", err);
           }
         }
       );
+
+      // after starting, detect torch support
+      setTimeout(() => detectTorchSupport(videoRef.current), 500);
     } catch (e: any) {
       console.error("startScanner error:", e);
       setError(String(e?.message || e));
       setIsRunning(false);
+      isRunningRef.current = false;
       stopScanner(codeReaderRef.current, videoEl);
     }
   };
 
   const handleStop = () => {
     setIsRunning(false);
+    isRunningRef.current = false;
     stopScanner(codeReaderRef.current, videoRef.current);
+    setTorchOn(false);
   };
 
-  // cleanup
+  const handleSwitchCamera = async () => {
+    if (!navigator?.mediaDevices?.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter((d) => d.kind === "videoinput");
+      setCameraDevices(videoInputs);
+      if (videoInputs.length <= 1) return;
+      const currentIndex = videoInputs.findIndex((d) => d.deviceId === selectedDeviceId);
+      const next = videoInputs[(currentIndex + 1) % videoInputs.length];
+      setSelectedDeviceId(next.deviceId);
+      await startScanner(next.deviceId);
+    } catch (e) {
+      console.warn("switch camera failed", e);
+      setError("Unable to switch camera");
+    }
+  };
+
+  // cleanup on unmount
   useEffect(() => {
     return () => {
       try {
@@ -204,10 +273,10 @@ export default function ScanQRCode() {
 
   return (
     <div>
-      <div>testTextScan: {testTextScan}</div>
+      <div style={{ marginBottom: 8 }}>testTextScan: {testTextScan}</div>
 
       {scannedUser && (
-        <div>
+        <div style={{ marginBottom: 8 }}>
           <p>User ID: {scannedUser.userId}</p>
           <p>Points: {scannedUser.points}</p>
         </div>
@@ -221,7 +290,7 @@ export default function ScanQRCode() {
         {!isRunning ? (
           <button
             onClick={async () => {
-              // explicit user gesture to improve success on mobile
+              // explicit user gesture
               await startScanner();
             }}
           >
@@ -230,24 +299,57 @@ export default function ScanQRCode() {
         ) : (
           <button onClick={handleStop}>Stop camera</button>
         )}
+
+        <button style={{ marginLeft: 8 }} onClick={handleSwitchCamera} disabled={cameraDevices.length <= 1}>
+          Switch camera
+        </button>
+
+        <button
+          style={{ marginLeft: 8 }}
+          onClick={async () => {
+            if (!torchAvailable) return;
+            await setTorch(!torchOn);
+          }}
+          disabled={!torchAvailable}
+        >
+          {torchOn ? "Torch off" : "Torch on"}
+        </button>
       </div>
 
       <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
         <div>Tips for phone-to-phone scanning:</div>
         <ul>
-          <li>Use the back camera and hold it steady, reduce screen glare on the scanned phone.</li>
-          <li>Increase brightness on the phone showing the QR code and reduce reflections.</li>
-          <li>Open the page on HTTPS or localhost. On iOS use Safari; on Android use Chrome for best support.</li>
+          <li>ใช้กล้องหลังของอุปกรณ์ที่สแกน และลดแสงสะท้อนบนหน้าจอที่แสดง QR</li>
+          <li>เพิ่มความสว่างของหน้าจอที่ถูกสแกน และหันมุมเล็กน้อยเพื่อลดแสงสะท้อน</li>
+          <li>ใช้เบราว์เซอร์ที่รองรับ (iOS: Safari, Android: Chrome) และหน้าเว็บต้องเป็น HTTPS หรือ localhost</li>
         </ul>
       </div>
 
-      <video
-        ref={videoRef}
-        style={{ width: "100%", maxHeight: 480, background: "#000", objectFit: "cover" }}
-        playsInline
-        autoPlay
-        muted
-      />
+      <div style={{ position: "relative", width: "100%", maxWidth: 720 }}>
+        <video
+          ref={videoRef}
+          style={{ width: "100%", maxHeight: 480, background: "#000", objectFit: "cover" }}
+          playsInline
+          autoPlay
+          muted
+        />
+        {/* simple viewfinder */}
+        <div
+          aria-hidden
+          style={{
+            pointerEvents: "none",
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            width: "60%",
+            height: "35%",
+            transform: "translate(-50%, -50%)",
+            border: "2px solid rgba(255,255,255,0.8)",
+            borderRadius: 8,
+            boxSizing: "border-box",
+          }}
+        />
+      </div>
 
       {permissionGranted === false && (
         <p style={{ color: "orange" }}>
@@ -257,4 +359,3 @@ export default function ScanQRCode() {
     </div>
   );
 }
-// ...existing
