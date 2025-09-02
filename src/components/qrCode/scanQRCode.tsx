@@ -2,7 +2,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { BrowserQRCodeReader } from "@zxing/browser";
-import { fetchUserByUserId } from "@/pages/api/users/getUser";
+// import { fetchUserByUserId } from "@/pages/api/users/getUser"; // removed - use fetch to /api instead
 
 type ScannedUser = {
   userId: string;
@@ -27,6 +27,23 @@ export default function ScanQRCode() {
   const lastScannedRef = useRef<string | null>(null);
   const lastScanTimeRef = useRef<number>(0);
   const isRunningRef = useRef<boolean>(false);
+
+  // helper: call your API route instead of importing server code
+  const fetchUserByUserId = async (userId: string) => {
+    try {
+      const url = `/api/users/getUser?userId=${encodeURIComponent(userId)}`;
+      const res = await fetch(url, { method: "GET" });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`API error ${res.status} ${txt}`);
+      }
+      // expecting JSON like { exists: boolean, user: {...} }
+      const data = await res.json();
+      return data;
+    } catch (e: any) {
+      throw new Error(e?.message || "Network error");
+    }
+  };
 
   const stopScanner = (reader: BrowserQRCodeReader | null, videoEl: HTMLVideoElement | null) => {
     if (reader) {
