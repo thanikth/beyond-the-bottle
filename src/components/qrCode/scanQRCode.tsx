@@ -27,9 +27,10 @@ export default function ScanQRCode() {
         html5Qr = new Html5Qrcode(elementId);
 
         const config = {
-          fps: 15,
-          qrbox: Math.min(window.innerWidth, 360),
-          aspectRatio: 1.333,
+          fps: 60,
+          qrbox: { width: 250, height: 250 },
+          // aspectRatio: 1.333,
+          rememberLastUsedCamera: true,
           disableFlip: false,
           experimentalFeatures: { useBarCodeDetectorIfSupported: true },
         };
